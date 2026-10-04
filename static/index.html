@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Zero Trust SOC — Live Environment</title>
+  <!-- Tailwind CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons CDN -->
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <!-- React + ReactDOM CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Babel for JSX in browser -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    *{box-sizing:border-box}
+    body{margin:0;padding:0;background:#020817;color:#e2e8f0;font-family:'Courier New',Consolas,monospace;overflow:hidden}
+    ::-webkit-scrollbar{width:4px;height:4px}
+    ::-webkit-scrollbar-track{background:#0a1628}
+    ::-webkit-scrollbar-thumb{background:#1e3a5f;border-radius:2px}
+    ::-webkit-scrollbar-thumb:hover{background:#00d4ff}
+    .glow-green{box-shadow:0 0 8px rgba(16,185,129,.4),0 0 20px rgba(16,185,129,.15)}
+    .glow-red{box-shadow:0 0 8px rgba(239,68,68,.5),0 0 20px rgba(239,68,68,.2)}
+    .glow-cyan{box-shadow:0 0 8px rgba(0,212,255,.4),0 0 20px rgba(0,212,255,.15)}
+    .glow-yellow{box-shadow:0 0 8px rgba(234,179,8,.4),0 0 20px rgba(234,179,8,.15)}
+    .panel-border{border:1px solid #1e3a5f;background:linear-gradient(180deg,#0d1f3c 0%,#080f1e 100%)}
+    .mfa-backdrop{backdrop-filter:blur(8px);background:rgba(2,8,23,.92)}
+    @keyframes slide-down{from{transform:translateY(-20px);opacity:0}to{transform:translateY(0);opacity:1}}
+    .slide-down{animation:slide-down .3s ease-out forwards}
+    @keyframes threat-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.6;transform:scale(1.02)}}
+    .threat-pulse{animation:threat-pulse .7s ease-in-out infinite}
+    @keyframes node-ping{0%{transform:scale(1);opacity:1}75%,100%{transform:scale(2);opacity:0}}
+    .node-ping{animation:node-ping 1.5s cubic-bezier(0,0,.2,1) infinite}
+    @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+    .cursor-blink::after{content:'█';animation:blink 1s step-end infinite;color:#00d4ff}
+    @keyframes border-glow{0%,100%{border-color:#1e3a5f}50%{border-color:#00d4ff44}}
+    .border-animate{animation:border-glow 3s ease-in-out infinite}
+  </style>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            'soc-bg': '#020817',
+            'soc-panel': '#0a1628',
+            'soc-border': '#1e3a5f',
+            'soc-card': '#0d1f3c',
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+// ════════════════════════════════════════════════════════════
+// ICONS (inline SVG wrappers — no lucide import needed)
+// ════════════════════════════════════════════════════════════
+const Icon = ({ d, size=16, className='', strokeWidth=2, fill='none' }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill={fill}
+    stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round"
+    strokeLinejoin="round" className={className}>
+    {Array.isArray(d) ? d.map((p,i) => <path key={i} d={p}/>) : <path d={d}/>}
+  </svg>
+);
+
+// Icon path data
+const ICONS = {
+  shield:     ['M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'],
+  shieldAlert:['M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z','M12 8v4','M12 16h.01'],
+  shieldX:    ['M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z','m14.5 9-5 5','m9.5 9 5 5'],
+  shieldCheck:['M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z','m9 12 2 2 4-4'],
+  lock:       ['M19 11H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2z','M7 11V7a5 5 0 0 1 10 0v4'],
+  user:       ['M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2','M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8z'],
+  users:      ['M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2','M23 21v-2a4 4 0 0 1-3-3.87','M16 3.13a4 4 0 0 1 0 7.75'],
+  alertTriangle:['m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3z','M12 9v4','M12 17h.01'],
+  activity:   ['M22 12h-4l-3 9L9 3l-3 9H2'],
+  wifi:       ['M5 12.55a11 11 0 0 1 14.08 0','M1.42 9a16 16 0 0 1 21.16 0','M8.53 16.11a6 6 0 0 1 6.95 0','M12 20h.01'],
+  clock:      ['M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z','M12 6v6l4 2'],
+  network:    ['M9 2H5a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z','M19 2h-4a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z','M9 14H5a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2z','M19 14h-4a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2z'],
+  terminal:   ['M4 17l6-6-6-6','M12 19h8'],
+  checkCircle:['M22 11.08V12a10 10 0 1 1-5.93-9.14','M22 4 12 14.01l-3-3'],
+  xCircle:    ['M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z','m15 9-6 6','m9 9 6 6'],
+  eye:        ['M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z','M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z'],
+  eyeOff:     ['M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24','M1 1l22 22'],
+  zap:        ['M13 2 3 14h9l-1 8 10-12h-9l1-8z'],
+  building:   ['M4 22V2h16v20H4z','M9 22V12h6v10','M9 7h1','M14 7h1','M9 2h1','M14 2h1'],
+  filter:     ['M22 3H2l8 9.46V19l4 2v-8.54L22 3z'],
+  chevronRight:['M9 18l6-6-6-6'],
+  keyRound:   ['M2 18v3c0 .6.4 1 .9 1h1.1c.5 0 .9-.4.9-1v-1h1v-1h1l1.4-1.4c.9.4 1.9.7 2.9.8 2.9.1 5.5-1.9 6-4.8.5-2.8-1-5.6-3.8-6.5-2.8-.9-5.8.4-7 3C6.2 12.5 6 13.2 6 14c0 .9.2 1.8.6 2.6L2 21.2M19 8a1 1 0 1 0 0-2 1 1 0 0 0 0 2z'],
+};
+
+const I = ({ name, size=14, className='', sw=2 }) => {
+  const d = ICONS[name];
+  if (!d) return null;
+  return <Icon d={d} size={size} className={className} strokeWidth={sw} />;
+};
+
+// ════════════════════════════════════════════════════════════
+// LOGIN SCREEN
+// ════════════════════════════════════════════════════════════
+function LoginScreen({ onLoginSuccess }) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPwd, setShowPwd] = useState(false);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!username.trim()) { setError('Username required'); return; }
+    setLoading(true); setError('');
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username.trim(), password }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.detail || 'Authentication failed');
+      } else {
+        onLoginSuccess(data.session_id, data.username);
+      }
+    } catch {
+      setError('Cannot reach Zero Trust gateway. Check the backend is running.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center justify-center w-full h-full relative overflow-hidden">
+      {/* Grid bg */}
+      <div className="absolute inset-0" style={{backgroundImage:`linear-gradient(rgba(0,212,255,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(0,212,255,.04) 1px,transparent 1px)`,backgroundSize:'40px 40px'}}/>
+      {/* Radial glow */}
+      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+        <div className="w-96 h-96 rounded-full opacity-10" style={{background:'radial-gradient(circle,#00d4ff 0%,transparent 70%)'}}/>
+      </div>
+      {/* Corner brackets */}
+      {[['top-4 left-4','border-l border-t'],['top-4 right-4','border-r border-t'],['bottom-4 left-4','border-l border-b'],['bottom-4 right-4','border-r border-b']].map(([pos,cls],i)=>(
+        <div key={i} className={`absolute ${pos} w-8 h-8 ${cls} border-cyan-500 opacity-50`}/>
+      ))}
+
+      <div className="relative z-10 w-full max-w-md px-4">
+        {/* Header */}
+        <div className="text-center mb-8">
+          <div className="flex justify-center mb-4">
+            <div className="relative">
+              <div className="w-20 h-20 rounded-full border-2 border-cyan-500 flex items-center justify-center bg-slate-900"
+                style={{boxShadow:'0 0 30px rgba(0,212,255,.4)'}}>
+                <I name="shield" size={40} className="text-cyan-400"/>
+              </div>
+              <div className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-emerald-500 border-2 border-slate-900 node-ping"/>
+            </div>
+          </div>
+          <h1 className="text-2xl font-bold tracking-widest text-cyan-400 uppercase">ZERO TRUST SOC</h1>
+          <p className="text-xs text-slate-500 tracking-widest mt-1 uppercase">Security Operations Center — Authentication Portal</p>
+          <div className="flex justify-center gap-2 mt-3">
+            {['CLASSIFIED','RESTRICTED ACCESS','MONITORED'].map(t=>(
+              <span key={t} className="text-[9px] bg-red-950 border border-red-800 text-red-400 px-2 py-0.5 rounded">{t}</span>
+            ))}
+          </div>
+        </div>
+
+        {/* Card */}
+        <div className="panel-border rounded-lg p-6 relative" style={{boxShadow:'0 0 40px rgba(0,212,255,.08),inset 0 1px 0 rgba(0,212,255,.1)'}}>
+          <div className="absolute top-0 left-6 right-6 h-px bg-gradient-to-r from-transparent via-cyan-500 to-transparent"/>
+          <div className="flex items-center gap-2 mb-6">
+            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"/>
+            <span className="text-xs text-slate-400 tracking-widest uppercase">Secure Channel Active</span>
+          </div>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="text-xs text-slate-400 tracking-widest uppercase block mb-1.5">Operator ID</label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-cyan-600"><I name="user" size={14}/></span>
+                <input type="text" value={username} onChange={e=>setUsername(e.target.value)} placeholder="e.g. admin"
+                  className="w-full bg-slate-900 border border-slate-700 rounded pl-9 pr-4 py-2.5 text-sm text-emerald-300 placeholder-slate-600 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-colors"/>
+              </div>
+            </div>
+            <div>
+              <label className="text-xs text-slate-400 tracking-widest uppercase block mb-1.5">Access Code</label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-cyan-600"><I name="lock" size={14}/></span>
+                <input type={showPwd?'text':'password'} value={password} onChange={e=>setPassword(e.target.value)} placeholder="Enter access code"
+                  className="w-full bg-slate-900 border border-slate-700 rounded pl-9 pr-10 py-2.5 text-sm text-emerald-300 placeholder-slate-600 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-colors"/>
+                <button type="button" onClick={()=>setShowPwd(v=>!v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-cyan-400">
+                  <I name={showPwd?'eyeOff':'eye'} size={14}/>
+                </button>
+              </div>
+            </div>
+            {error && (
+              <div className="flex items-center gap-2 bg-red-950/60 border border-red-800 rounded p-2.5 slide-down">
+                <I name="alertTriangle" size={14} className="text-red-400 shrink-0"/>
+                <span className="text-xs text-red-400">{error}</span>
+              </div>
+            )}
+            <button type="submit" disabled={loading}
+              className="w-full py-3 rounded font-bold text-sm tracking-widest uppercase transition-all duration-200 disabled:opacity-50"
+              style={{background:loading?'#0d1f3c':'linear-gradient(135deg,#0284c7,#0891b2)',border:'1px solid #0ea5e9',color:'#e0f2fe',boxShadow:loading?'none':'0 0 20px rgba(14,165,233,.3)'}}>
+              {loading ? (
+                <span className="flex items-center justify-center gap-2">
+                  <span className="w-4 h-4 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin"/>
+                  Authenticating...
+                </span>
+              ) : 'Authenticate →'}
+            </button>
+          </form>
+          <p className="text-[10px] text-slate-600 text-center mt-4">All access attempts are logged · Zero Trust Architecture v2.0</p>
+        </div>
+        <div className="mt-4 flex items-center gap-2 justify-center text-xs text-slate-500">
+          <I name="shield" size={12} className="text-cyan-700"/>
+          MFA re-authentication required every 5 minutes
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+// MFA MODAL
+// ════════════════════════════════════════════════════════════
+function MFAModal({ sessionId, reason, onSuccess }) {
+  const [code, setCode] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const inputRef = useRef(null);
+
+  useEffect(() => { setTimeout(()=>inputRef.current?.focus(), 100); }, []);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true); setError('');
+    try {
+      const res = await fetch('/api/auth/verify-mfa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, mfa_code: code }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.detail || 'MFA verification failed');
+        setCode('');
+      } else {
+        onSuccess();
+      }
+    } catch {
+      setError('Cannot reach authentication server');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center mfa-backdrop">
+      {[['top-6 left-6','border-l-2 border-t-2'],['top-6 right-6','border-r-2 border-t-2'],
+        ['bottom-6 left-6','border-l-2 border-b-2'],['bottom-6 right-6','border-r-2 border-b-2']].map(([pos,cls],i)=>(
+        <div key={i} className={`absolute ${pos} w-10 h-10 ${cls} border-yellow-500 opacity-80`}/>
+      ))}
+      <div className="relative w-full max-w-sm mx-4 slide-down">
+        <div className="rounded-lg overflow-hidden" style={{border:'1px solid #ca8a04',background:'linear-gradient(180deg,#1c1400 0%,#0a0800 100%)',boxShadow:'0 0 60px rgba(234,179,8,.25)'}}>
+          <div className="bg-yellow-950/80 border-b border-yellow-800 px-5 py-4">
+            <div className="flex items-center gap-3">
+              <div className="relative">
+                <I name="shieldAlert" size={32} className="text-yellow-400"/>
+                <div className="absolute inset-0 rounded-full bg-yellow-400 opacity-20 animate-ping"/>
+              </div>
+              <div>
+                <h2 className="text-yellow-300 font-bold text-sm tracking-widest uppercase">MFA Re-Authentication Required</h2>
+                <p className="text-yellow-600 text-xs mt-0.5">
+                  {reason==='initial' ? 'Initial Zero Trust verification' : '⚠ Session timeout — re-verify identity'}
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="px-5 py-5">
+            <div className="flex items-center justify-between mb-5 text-xs">
+              <div className="flex items-center gap-1.5 text-yellow-500">
+                <div className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse"/>
+                <span>Session paused — access suspended</span>
+              </div>
+              <span className="text-slate-500 font-mono">SOC MANAGER</span>
+            </div>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <label className="text-xs text-yellow-600 tracking-widest uppercase block mb-2 flex items-center gap-1.5">
+                  <I name="keyRound" size={12}/> Multi-Factor Authentication Code
+                </label>
+                <input ref={inputRef} type="password" value={code} onChange={e=>setCode(e.target.value)}
+                  placeholder="Enter MFA passphrase" autoComplete="off"
+                  className="w-full bg-black/60 border border-yellow-800 rounded px-4 py-3 text-sm text-yellow-300 placeholder-yellow-900 focus:outline-none focus:border-yellow-500 focus:ring-1 focus:ring-yellow-500 tracking-widest font-mono"/>
+              </div>
+              {error && (
+                <div className="flex items-center gap-2 bg-red-950/60 border border-red-800 rounded p-2.5">
+                  <I name="alertTriangle" size={14} className="text-red-400 shrink-0"/>
+                  <span className="text-xs text-red-400">{error}</span>
+                </div>
+              )}
+              <button type="submit" disabled={loading||!code.trim()}
+                className="w-full py-3 rounded font-bold text-sm tracking-widest uppercase transition-all duration-200 disabled:opacity-40"
+                style={{background:'linear-gradient(135deg,#78350f,#92400e)',border:'1px solid #ca8a04',color:'#fef08a',boxShadow:'0 0 15px rgba(202,138,4,.25)'}}>
+                {loading ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <span className="w-4 h-4 border-2 border-yellow-400 border-t-transparent rounded-full animate-spin"/>
+                    Verifying...
+                  </span>
+                ) : (
+                  <span className="flex items-center justify-center gap-2">
+                    <I name="checkCircle" size={14}/> Verify & Resume Access
+                  </span>
+                )}
+              </button>
+            </form>
+            <p className="text-[10px] text-yellow-900 text-center mt-4 leading-relaxed">
+              Unauthorized access attempts are logged and escalated to incident response.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+// NETWORK MAP (Canvas)
+// ════════════════════════════════════════════════════════════
+const ZONES_MAP = [
+  { id:'corp',  label:'Corporate\nNetwork',   color:'#0ea5e9', x:.25, y:.28 },
+  { id:'wfh',   label:'WFH / Remote\nNodes',  color:'#10b981', x:.75, y:.28 },
+  { id:'dmz',   label:'DMZ Server\nZone',     color:'#f59e0b', x:.25, y:.72 },
+  { id:'cloud', label:'Cloud\nServices',      color:'#8b5cf6', x:.75, y:.72 },
+];
+const ZONE_NAME_MAP = {
+  'Corporate Network':'corp','WFH / Remote Nodes':'wfh',
+  'DMZ Server Zone':'dmz','Cloud Services':'cloud',
+};
+let _animPkts = [];
+
+function NetworkMap({ events }) {
+  const canvasRef = useRef(null);
+  const animRef = useRef(null);
+  const lastEvt = useRef(null);
+
+  useEffect(()=>{
+    const e = events[0];
+    if (!e || e===lastEvt.current) return;
+    lastEvt.current = e;
+    const srcId = ZONE_NAME_MAP[e.src_zone];
+    const dstId = ZONE_NAME_MAP[e.dst_zone];
+    if (!srcId||!dstId) return;
+    _animPkts.push({ srcId, dstId, progress:0, threat: e.threat||e.type==='ATTACK' });
+    if (_animPkts.length>30) _animPkts.shift();
+  },[events]);
+
+  const draw = useCallback(()=>{
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const W=canvas.width, H=canvas.height;
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle='#020817'; ctx.fillRect(0,0,W,H);
+    // Grid
+    ctx.strokeStyle='rgba(0,212,255,.05)'; ctx.lineWidth=.5;
+    for(let x=0;x<W;x+=25){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
+    for(let y=0;y<H;y+=25){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+    const gp = z=>({x:z.x*W, y:z.y*H});
+    // Connections
+    [['corp','wfh'],['corp','dmz'],['corp','cloud'],['wfh','cloud'],['dmz','cloud'],['wfh','dmz']].forEach(([a,b])=>{
+      const pa=gp(ZONES_MAP.find(z=>z.id===a)), pb=gp(ZONES_MAP.find(z=>z.id===b));
+      ctx.beginPath(); ctx.moveTo(pa.x,pa.y); ctx.lineTo(pb.x,pb.y);
+      ctx.strokeStyle='rgba(30,58,95,.8)'; ctx.lineWidth=1; ctx.setLineDash([4,6]); ctx.stroke(); ctx.setLineDash([]);
+    });
+    // Packets
+    _animPkts = _animPkts.filter(p=>p.progress<1);
+    _animPkts.forEach(pkt=>{
+      pkt.progress+=.025;
+      const src=ZONES_MAP.find(z=>z.id===pkt.srcId), dst=ZONES_MAP.find(z=>z.id===pkt.dstId);
+      if(!src||!dst) return;
+      const ps=gp(src), pd=gp(dst);
+      const cx=ps.x+(pd.x-ps.x)*pkt.progress, cy=ps.y+(pd.y-ps.y)*pkt.progress;
+      const color=pkt.threat?'#ef4444':'#00d4ff', size=pkt.threat?5:3;
+      ctx.shadowBlur=pkt.threat?12:6; ctx.shadowColor=color;
+      ctx.beginPath(); ctx.arc(cx,cy,size,0,Math.PI*2); ctx.fillStyle=color; ctx.fill();
+      ctx.shadowBlur=0;
+      for(let t=1;t<=4;t++){
+        const tp=Math.max(0,pkt.progress-t*.02);
+        const tx=ps.x+(pd.x-ps.x)*tp, ty=ps.y+(pd.y-ps.y)*tp;
+        ctx.beginPath(); ctx.arc(tx,ty,size*(1-t*.2),0,Math.PI*2);
+        ctx.fillStyle=`${color}${Math.round((0.5-t*.1)*255).toString(16).padStart(2,'0')}`; ctx.fill();
+      }
+    });
+    // Zones
+    ZONES_MAP.forEach(zone=>{
+      const {x:cx,y:cy}=gp(zone), r=Math.min(W,H)*.09;
+      const grad=ctx.createRadialGradient(cx,cy,r*.6,cx,cy,r*1.4);
+      grad.addColorStop(0,`${zone.color}18`); grad.addColorStop(1,'transparent');
+      ctx.beginPath(); ctx.arc(cx,cy,r*1.4,0,Math.PI*2); ctx.fillStyle=grad; ctx.fill();
+      ctx.shadowBlur=15; ctx.shadowColor=zone.color;
+      ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.fillStyle=`${zone.color}15`; ctx.fill();
+      ctx.strokeStyle=zone.color; ctx.lineWidth=1.5; ctx.stroke(); ctx.shadowBlur=0;
+      ctx.beginPath(); ctx.arc(cx,cy,4,0,Math.PI*2); ctx.fillStyle=zone.color; ctx.fill();
+      ctx.font='bold 9px "Courier New",monospace'; ctx.textAlign='center'; ctx.fillStyle=zone.color;
+      zone.label.split('\n').forEach((ln,i)=>ctx.fillText(ln,cx,cy+r+14+i*12));
+    });
+    ctx.font='8px "Courier New",monospace'; ctx.fillStyle='rgba(0,212,255,.3)'; ctx.textAlign='center';
+    ctx.fillText('MICROSEGMENTATION PERIMETER',W/2,H/2); ctx.fillText('─── ZERO TRUST ───',W/2,H/2+12);
+    animRef.current=requestAnimationFrame(draw);
+  },[]);
+
+  useEffect(()=>{
+    animRef.current=requestAnimationFrame(draw);
+    return ()=>cancelAnimationFrame(animRef.current);
+  },[draw]);
+
+  useEffect(()=>{
+    const obs=new ResizeObserver(()=>{
+      const c=canvasRef.current; if(!c) return;
+      c.width=c.offsetWidth; c.height=c.offsetHeight;
+    });
+    if(canvasRef.current){
+      obs.observe(canvasRef.current);
+      canvasRef.current.width=canvasRef.current.offsetWidth;
+      canvasRef.current.height=canvasRef.current.offsetHeight;
+    }
+    return ()=>obs.disconnect();
+  },[]);
+
+  return (
+    <div className="w-full h-full relative">
+      <canvas ref={canvasRef} className="w-full h-full"/>
+      <div className="absolute bottom-2 left-2 flex gap-2">
+        <div className="flex items-center gap-1 text-[9px] text-slate-500">
+          <div className="w-2 h-2 rounded-full bg-cyan-400"/>Traffic
+        </div>
+        <div className="flex items-center gap-1 text-[9px] text-slate-500">
+          <div className="w-2 h-2 rounded-full bg-red-400"/>Threat
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+// HEADER
+// ════════════════════════════════════════════════════════════
+const fmtTime = s => `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+
+function Header({ username, mfaTimer, reqPerSec, threatLevel='MEDIUM', totalBlocked }) {
+  const tCfg = {
+    HIGH:   { color:'text-red-400',     bg:'bg-red-950/60',     border:'border-red-800',     pulse:true  },
+    MEDIUM: { color:'text-yellow-400',  bg:'bg-yellow-950/60',  border:'border-yellow-800',  pulse:false },
+    LOW:    { color:'text-emerald-400', bg:'bg-emerald-950/60', border:'border-emerald-800', pulse:false },
+  }[threatLevel] || { color:'text-yellow-400', bg:'bg-yellow-950/60', border:'border-yellow-800', pulse:false };
+  const warn = mfaTimer <= 60;
+
+  return (
+    <header className="h-12 shrink-0 flex items-center justify-between px-4 border-b border-slate-800 relative"
+      style={{background:'linear-gradient(180deg,#0d1f3c 0%,#020817 100%)'}}>
+      <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-cyan-800 to-transparent"/>
+      {/* Logo */}
+      <div className="flex items-center gap-3">
+        <div className="relative">
+          <I name="shield" size={22} className="text-cyan-400" style={{filter:'drop-shadow(0 0 6px rgba(0,212,255,.6))'}}/>
+          <div className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-400 animate-pulse"/>
+        </div>
+        <div>
+          <span className="text-cyan-300 font-bold text-xs tracking-[.2em] uppercase">ZERO TRUST SOC</span>
+          <span className="text-slate-500 text-[9px] tracking-widest ml-2 uppercase">— LIVE ENVIRONMENT</span>
+        </div>
+        <div className="hidden lg:flex items-center gap-1 ml-2 px-2 py-0.5 rounded border border-emerald-800 bg-emerald-950/40">
+          <I name="zap" size={10} className="text-emerald-400"/>
+          <span className="text-[9px] text-emerald-400 tracking-widest">ACTIVE</span>
+        </div>
+      </div>
+      {/* Stats */}
+      <div className="flex items-center gap-4">
+        <div className={`flex items-center gap-1.5 px-3 py-1 rounded border ${tCfg.bg} ${tCfg.border}`}>
+          <I name="alertTriangle" size={12} className={`${tCfg.color} ${tCfg.pulse?'animate-pulse':''}`}/>
+          <span className={`text-[10px] font-bold tracking-widest uppercase ${tCfg.color}`}>THREAT: {threatLevel}</span>
+        </div>
+        <div className="flex items-center gap-1.5 text-xs text-slate-400">
+          <I name="activity" size={13} className="text-cyan-600"/>
+          <span className="font-mono text-cyan-400 font-bold">{reqPerSec}</span>
+          <span className="text-slate-600 text-[10px]">pkt/s</span>
+        </div>
+        <div className="flex items-center gap-1.5 text-xs text-slate-400">
+          <I name="shieldX" size={13} className="text-red-600"/>
+          <span className="font-mono text-red-400 font-bold">{totalBlocked||0}</span>
+          <span className="text-slate-600 text-[10px]">blocked</span>
+        </div>
+      </div>
+      {/* Timer + user */}
+      <div className="flex items-center gap-4">
+        <div className={`flex items-center gap-1.5 px-3 py-1 rounded border transition-all ${warn?'bg-red-950/60 border-red-700 glow-red':'bg-slate-900/60 border-slate-700'}`}>
+          <I name="clock" size={12} className={warn?'text-red-400 animate-pulse':'text-slate-400'}/>
+          <span className={`font-mono text-xs font-bold ${warn?'text-red-400':'text-slate-300'}`}>{fmtTime(mfaTimer)}</span>
+          <span className="text-[9px] text-slate-600 tracking-widest">MFA</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-6 h-6 rounded-full bg-cyan-900 border border-cyan-700 flex items-center justify-center">
+            <I name="user" size={12} className="text-cyan-400"/>
+          </div>
+          <div className="hidden sm:block">
+            <div className="text-xs text-slate-300 font-medium leading-none">{username}</div>
+            <div className="text-[9px] text-cyan-600 tracking-widest uppercase mt-0.5">SOC Manager</div>
+          </div>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+// MICROSEG PANEL
+// ════════════════════════════════════════════════════════════
+function MicrosegPanel({ events }) {
+  const attacks = events.filter(e=>e.type==='ATTACK').slice(0,20);
+  const packets = events.filter(e=>e.type==='PACKET').slice(0,8);
+  const blockedCount = events.filter(e=>e.type==='ATTACK').length;
+
+  return (
+    <div className="flex flex-col h-full gap-0.5">
+      {/* Label */}
+      <div className="flex items-center gap-2 px-3 py-1.5 panel-border rounded">
+        <I name="network" size={13} className="text-cyan-500"/>
+        <span className="text-[10px] text-cyan-400 tracking-widest uppercase font-bold">Live Microsegmentation & Threat Stream</span>
+        <div className="ml-auto flex items-center gap-1">
+          <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"/>
+          <span className="text-[9px] text-emerald-600">LIVE</span>
+        </div>
+      </div>
+      {/* Canvas map */}
+      <div className="flex-1 min-h-0 panel-border rounded overflow-hidden">
+        <NetworkMap events={events}/>
+      </div>
+      {/* Attack log */}
+      <div className="h-48 panel-border rounded overflow-hidden flex flex-col">
+        <div className="flex items-center justify-between px-3 py-2 border-b border-slate-800 shrink-0">
+          <div className="flex items-center gap-1.5">
+            <I name="shieldX" size={13} className="text-red-500"/>
+            <span className="text-[10px] text-red-400 tracking-widest uppercase font-bold">Automated DoS/DDoS Mitigation</span>
+          </div>
+          <span className="text-[9px] bg-red-950 border border-red-800 text-red-400 px-2 py-0.5 rounded font-mono">{blockedCount} BLOCKED</span>
+        </div>
+        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+          {attacks.length===0 ? (
+            <div className="flex items-center justify-center h-full text-slate-600 text-xs">Monitoring for threats...</div>
+          ) : attacks.map((e,i)=>(
+            <div key={`${e.id}-${i}`} className="threat-pulse rounded px-2 py-1.5 border border-red-900/60 bg-red-950/30 slide-down">
+              <div className="flex items-start gap-1.5">
+                <I name="shieldX" size={11} className="text-red-500 mt-0.5 shrink-0"/>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[9px] font-mono text-red-300 font-bold">{e.timestamp}</span>
+                    <span className="text-[9px] bg-red-900 text-red-300 px-1 rounded">{e.attack_type}</span>
+                    <span className="text-[9px] bg-slate-800 text-slate-400 px-1 rounded ml-auto">{(e.pps||0).toLocaleString()} pps</span>
+                  </div>
+                  <p className="text-[9px] text-red-400 mt-0.5 leading-tight break-all">{e.message}</p>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      {/* Packet stream */}
+      <div className="h-24 panel-border rounded overflow-hidden flex flex-col">
+        <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-slate-800 shrink-0">
+          <I name="activity" size={11} className="text-emerald-500"/>
+          <span className="text-[10px] text-emerald-400 tracking-widest uppercase">Live Packet Stream</span>
+        </div>
+        <div className="flex-1 overflow-hidden p-1.5 space-y-0.5">
+          {packets.map((p,i)=>(
+            <div key={`${p.id}-${i}`} className="flex items-center gap-2 text-[10px] font-mono truncate slide-down">
+              <span className="text-cyan-700 shrink-0">{p.timestamp}</span>
+              <span className="text-emerald-600 shrink-0">{p.protocol}</span>
+              <span className="text-slate-600 truncate">{p.src_ip} → {p.dst_ip}</span>
+              <span className="ml-auto text-emerald-700 shrink-0">{p.bytes}B</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+// EMPLOYEE PANEL
+// ════════════════════════════════════════════════════════════
+const ST_CFG = {
+  APPROVED:{ label:'APPROVED', color:'text-emerald-400', bg:'bg-emerald-950/40', border:'border-emerald-800', dot:'bg-emerald-400' },
+  PENDING: { label:'PENDING',  color:'text-yellow-400',  bg:'bg-yellow-950/40',  border:'border-yellow-800',  dot:'bg-yellow-400' },
+  REJECTED:{ label:'REJECTED', color:'text-red-400',     bg:'bg-red-950/40',     border:'border-red-800',     dot:'bg-red-400'    },
+};
+
+function EmployeeCard({ emp, onAction }) {
+  const cfg = ST_CFG[emp.status] || ST_CFG.PENDING;
+  const isUnknown = emp.department === 'UNKNOWN';
+  return (
+    <div className={`rounded border transition-all duration-300 overflow-hidden ${isUnknown?'border-red-700 bg-red-950/20':cfg.border+' panel-border'} ${emp.status==='APPROVED'?'glow-green':emp.status==='REJECTED'?'glow-red':''}`}>
+      <div className="px-3 py-2.5">
+        <div className="flex items-start gap-2">
+          <div className={`w-9 h-9 rounded-lg flex items-center justify-center text-xs font-bold shrink-0 ${isUnknown?'bg-red-900 text-red-300 border border-red-700':'bg-slate-800 text-cyan-300 border border-slate-700'}`}>
+            {emp.avatar}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-1 flex-wrap">
+              <span className={`text-xs font-bold truncate ${isUnknown?'text-red-300':'text-slate-200'}`}>{emp.name}</span>
+              {emp.remote && (
+                <span className="text-[8px] bg-cyan-950 border border-cyan-800 text-cyan-400 px-1.5 py-0.5 rounded flex items-center gap-0.5 shrink-0">
+                  <I name="wifi" size={9}/> WFH
+                </span>
+              )}
+              {isUnknown && <span className="text-[8px] bg-red-950 border border-red-700 text-red-400 px-1.5 py-0.5 rounded shrink-0">⚠ UNKNOWN</span>}
+            </div>
+            <div className="text-[10px] text-slate-500 truncate mt-0.5">{emp.role}</div>
+            {emp.remote ? (
+              <div className="flex items-center gap-1 mt-1">
+                <I name="wifi" size={10} className="text-cyan-600"/>
+                <span className="text-[10px] font-mono text-cyan-400 font-bold">{emp.ip}</span>
+                <span className="text-[9px] text-slate-600">public IP</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1 mt-1">
+                <I name="building" size={10} className="text-slate-600"/>
+                <span className="text-[10px] font-mono text-slate-500">{emp.ip}</span>
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 mt-2 flex-wrap">
+          <span className="text-[9px] text-slate-600 bg-slate-900 px-2 py-0.5 rounded">{emp.department}</span>
+          <span className="flex items-center gap-1 text-[9px] text-slate-600">
+            <I name="clock" size={10}/> {emp.lastSeen}
+          </span>
+          <span className={`ml-auto flex items-center gap-1 text-[9px] px-2 py-0.5 rounded ${cfg.bg} ${cfg.border} ${cfg.color} border font-bold`}>
+            <div className={`w-1.5 h-1.5 rounded-full ${cfg.dot} ${emp.status==='PENDING'?'animate-pulse':''}`}/>
+            {cfg.label}
+          </span>
+        </div>
+      </div>
+      {emp.status==='PENDING' ? (
+        <div className="flex border-t border-slate-800">
+          <button onClick={()=>onAction(emp.id,'APPROVED')}
+            className="flex-1 flex items-center justify-center gap-1 py-2 text-[10px] text-emerald-400 hover:bg-emerald-950/60 transition-colors border-r border-slate-800 tracking-widest uppercase font-bold">
+            <I name="checkCircle" size={11}/> Accept
+          </button>
+          <button onClick={()=>onAction(emp.id,'REJECTED')}
+            className="flex-1 flex items-center justify-center gap-1 py-2 text-[10px] text-red-400 hover:bg-red-950/60 transition-colors tracking-widest uppercase font-bold">
+            <I name="xCircle" size={11}/> Reject
+          </button>
+        </div>
+      ) : (
+        <div className="flex border-t border-slate-800">
+          {emp.status==='APPROVED' && (
+            <button onClick={()=>onAction(emp.id,'REJECTED')}
+              className="flex-1 flex items-center justify-center gap-1 py-1.5 text-[10px] text-red-500/70 hover:bg-red-950/40 transition-colors tracking-wider uppercase">
+              <I name="xCircle" size={11}/> Revoke
+            </button>
+          )}
+          {emp.status==='REJECTED' && (
+            <button onClick={()=>onAction(emp.id,'APPROVED')}
+              className="flex-1 flex items-center justify-center gap-1 py-1.5 text-[10px] text-emerald-500/70 hover:bg-emerald-950/40 transition-colors tracking-wider uppercase">
+              <I name="checkCircle" size={11}/> Re-approve
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EmployeePanel({ employees, onAction }) {
+  const [filter, setFilter] = useState('ALL');
+  const counts = {
+    ALL: employees.length,
+    PENDING: employees.filter(e=>e.status==='PENDING').length,
+    APPROVED: employees.filter(e=>e.status==='APPROVED').length,
+    REJECTED: employees.filter(e=>e.status==='REJECTED').length,
+  };
+  const visible = filter==='ALL' ? employees : employees.filter(e=>e.status===filter);
+  return (
+    <div className="flex-1 min-h-0 panel-border rounded flex flex-col overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-800 shrink-0">
+        <div className="flex items-center gap-2">
+          <I name="users" size={14} className="text-cyan-500"/>
+          <span className="text-xs text-cyan-400 tracking-widest uppercase font-bold">Employee Access Approval Center</span>
+        </div>
+        <div className="flex items-center gap-2 text-[10px]">
+          <I name="shieldCheck" size={11} className="text-cyan-600"/>
+          <span className="text-slate-500">Zero Trust Verification</span>
+        </div>
+      </div>
+      <div className="flex items-center gap-1 px-4 py-2 border-b border-slate-800 shrink-0">
+        <I name="filter" size={11} className="text-slate-500 mr-1"/>
+        {Object.entries(counts).map(([key,count])=>(
+          <button key={key} onClick={()=>setFilter(key)}
+            className={`px-3 py-1 rounded text-[10px] tracking-widest uppercase font-bold transition-all ${
+              filter===key
+                ? key==='ALL'?'bg-cyan-900 text-cyan-300 border border-cyan-700'
+                  :key==='APPROVED'?'bg-emerald-900 text-emerald-300 border border-emerald-700'
+                  :key==='PENDING'?'bg-yellow-900 text-yellow-300 border border-yellow-700'
+                  :'bg-red-900 text-red-300 border border-red-700'
+                : 'text-slate-500 hover:text-slate-300 border border-transparent'
+            }`}>
+            {key} <span className="ml-1 opacity-70">({count})</span>
+          </button>
+        ))}
+      </div>
+      <div className="flex-1 min-h-0 overflow-y-auto p-3">
+        <div className="grid grid-cols-2 xl:grid-cols-3 gap-2">
+          {visible.map(emp=><EmployeeCard key={emp.id} emp={emp} onAction={onAction}/>)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+// LOG TERMINAL
+// ════════════════════════════════════════════════════════════
+const LVL_CFG = {
+  CRITICAL:{ color:'text-red-400',     prefix:'[CRITICAL]', bg:'bg-red-950/20'  },
+  WARNING: { color:'text-yellow-400',  prefix:'[WARNING] ', bg:'bg-yellow-950/20'},
+  SUCCESS: { color:'text-emerald-400', prefix:'[SUCCESS] ', bg:''               },
+  INFO:    { color:'text-cyan-400',    prefix:'[INFO]    ', bg:''               },
+};
+
+function LogTerminal({ logs }) {
+  return (
+    <div className="h-full panel-border rounded flex flex-col overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2 border-b border-slate-800 shrink-0">
+        <div className="flex items-center gap-2">
+          <I name="terminal" size={13} className="text-emerald-500"/>
+          <span className="text-[10px] text-emerald-400 tracking-widest uppercase font-bold cursor-blink">Security Event Log Terminal</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {['CRITICAL','SUCCESS','INFO'].map(lvl=>(
+            <div key={lvl} className={`flex items-center gap-1 text-[9px] ${LVL_CFG[lvl]?.color||'text-slate-400'}`}>
+              <div className="w-1.5 h-1.5 rounded-full bg-current"/>{lvl}
+            </div>
+          ))}
+          <span className="text-[9px] text-slate-600 font-mono ml-1">{logs.length} events</span>
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto p-2 space-y-0.5" style={{fontFamily:"'Courier New',monospace",fontSize:'11px',lineHeight:1.6}}>
+        {logs.length===0 ? (
+          <div className="flex items-center gap-2 text-slate-600 p-2">
+            <I name="chevronRight" size={12}/> Waiting for security events... <span className="animate-pulse">█</span>
+          </div>
+        ) : logs.map((log,i)=>{
+          const cfg=LVL_CFG[log.level]||LVL_CFG.INFO;
+          return (
+            <div key={i} className={`flex items-start gap-2 px-2 py-0.5 rounded ${cfg.bg}`}>
+              <span className="text-slate-600 font-mono text-[10px] shrink-0 w-[60px]">{log.timestamp}</span>
+              <span className={`font-mono text-[10px] font-bold shrink-0 ${cfg.color}`}>{cfg.prefix}</span>
+              <span className={`text-[10px] ${cfg.color} break-all leading-relaxed`}>{log.message}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+// SOC DASHBOARD
+// ════════════════════════════════════════════════════════════
+function SOCDashboard({ username, sessionId, mfaTimer }) {
+  const [events, setEvents] = useState([]);
+  const [logs, setLogs] = useState([]);
+  const [employees, setEmployees] = useState([]);
+  const [stats, setStats] = useState({ total_attacks_blocked:0, threat_level:'MEDIUM' });
+  const [reqPerSec, setReqPerSec] = useState(0);
+  const wsRef = useRef(null);
+  const pktRef = useRef(0);
+
+  useEffect(()=>{
+    fetch('/api/employees').then(r=>r.json()).then(d=>setEmployees(d.employees||[])).catch(()=>{});
+    fetch('/api/logs').then(r=>r.json()).then(d=>setLogs(d.logs||[])).catch(()=>{});
+  },[]);
+
+  const addLog = useCallback(entry=>setLogs(p=>[entry,...p].slice(0,200)),[]);
+
+  useEffect(()=>{
+    const connect=()=>{
+      // Use wss:// on HTTPS (production), ws:// on HTTP (local)
+      const wsProto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      const wsUrl = `${wsProto}://${window.location.host}/ws/stream`;
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+      ws.onmessage=e=>{
+        try {
+          const msg=JSON.parse(e.data);
+          if(msg.type==='PING'||msg.type==='CONNECTED') return;
+          if(msg.type==='STATS'){ setStats(msg); return; }
+          if(msg.type==='EMPLOYEE_UPDATE'){
+            setEmployees(p=>p.map(em=>em.id===msg.employee_id?{...em,status:msg.new_status}:em));
+            addLog({timestamp:msg.timestamp,level:msg.new_status==='APPROVED'?'SUCCESS':'CRITICAL',message:msg.message});
+            return;
+          }
+          if(msg.type==='PACKET'||msg.type==='ATTACK'){
+            pktRef.current++;
+            setEvents(p=>[msg,...p].slice(0,80));
+            if(msg.type==='ATTACK') addLog({timestamp:msg.timestamp,level:'CRITICAL',message:msg.message});
+          }
+        } catch{}
+      };
+      ws.onclose=()=>setTimeout(connect,2000);
+    };
+    connect();
+    return ()=>wsRef.current?.close();
+  },[addLog]);
+
+  useEffect(()=>{
+    const t=setInterval(()=>{ setReqPerSec(pktRef.current); pktRef.current=0; },1000);
+    return ()=>clearInterval(t);
+  },[]);
+
+  const handleAction = useCallback(async(id,action)=>{
+    try {
+      const res=await fetch(`/api/employees/${id}/action`,{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({action}),
+      });
+      if(res.ok) setEmployees(p=>p.map(em=>em.id===id?{...em,status:action}:em));
+    }catch{}
+  },[]);
+
+  return (
+    <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#020817]">
+      <Header username={username} mfaTimer={mfaTimer} reqPerSec={reqPerSec}
+        threatLevel={stats.threat_level} totalBlocked={stats.total_attacks_blocked}/>
+      <div className="flex flex-1 min-h-0 gap-0.5 p-1.5 pt-0">
+        <div className="w-80 shrink-0 flex flex-col min-h-0 gap-0.5">
+          <MicrosegPanel events={events}/>
+        </div>
+        <div className="flex-1 min-w-0 flex flex-col min-h-0 gap-0.5">
+          <EmployeePanel employees={employees} onAction={handleAction}/>
+          <div className="h-48 shrink-0">
+            <LogTerminal logs={logs}/>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+// APP ROOT
+// ════════════════════════════════════════════════════════════
+const MFA_INTERVAL = 5 * 60;
+
+function App() {
+  const [phase, setPhase] = useState('login');
+  const [sessionId, setSessionId] = useState(null);
+  const [username, setUsername] = useState('');
+  const [mfaOpen, setMfaOpen] = useState(false);
+  const [mfaTimer, setMfaTimer] = useState(MFA_INTERVAL);
+  const [mfaReason, setMfaReason] = useState('initial');
+
+  const handleLoginSuccess = useCallback((sid,uname)=>{
+    setSessionId(sid); setUsername(uname);
+    setPhase('mfa'); setMfaReason('initial'); setMfaOpen(true);
+  },[]);
+
+  const handleMFASuccess = useCallback(()=>{
+    setMfaOpen(false); setPhase('dashboard'); setMfaTimer(MFA_INTERVAL);
+  },[]);
+
+  useEffect(()=>{
+    if(phase!=='dashboard') return;
+    const t=setInterval(()=>{
+      setMfaTimer(v=>{
+        if(v<=1){ setMfaReason('reauth'); setMfaOpen(true); return MFA_INTERVAL; }
+        return v-1;
+      });
+    },1000);
+    return ()=>clearInterval(t);
+  },[phase]);
+
+  return (
+    <div className="w-screen h-screen overflow-hidden bg-[#020817] relative">
+      {/* Scanline overlay */}
+      <div className="pointer-events-none fixed inset-0 z-40" style={{background:'repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,212,255,.018) 2px,rgba(0,212,255,.018) 4px)'}}/>
+      {phase==='login' && <LoginScreen onLoginSuccess={handleLoginSuccess}/>}
+      {phase==='dashboard' && <SOCDashboard username={username} sessionId={sessionId} mfaTimer={mfaTimer}/>}
+      {mfaOpen && <MFAModal sessionId={sessionId} reason={mfaReason} onSuccess={handleMFASuccess}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
